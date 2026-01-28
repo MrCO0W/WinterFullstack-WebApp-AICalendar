@@ -4,6 +4,7 @@ import express from 'express';
 import fs from'fs';
 import { GoogleGenAI } from "@google/genai";
 import dotenv from 'dotenv';
+import { pool } from '../db/db.js';
 
 dotenv.config();
 
@@ -13,7 +14,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const router = express.Router();
 
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, "upload/"),
+    destination: (req, file, cb) => cb(null, "uploads/"),
     filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
 });
 
@@ -40,8 +41,7 @@ router.post("/image", upload.single('image'), async(req, res) => {
     });
     }
 
-
-
+    // gemini query
     try{
         if(!req.file) return res.status(400).send({success : false, message : "file not found"});
         
@@ -91,11 +91,24 @@ router.post("/image", upload.single('image'), async(req, res) => {
 
         const resultText = response.text || "failed to analyze image";
 
+        
+        // Insert log
+        const newLog = await pool.query(
+            `INSERT INTO logs 
+            (message, filepath) VALUES ($1, $2) 
+            RETURNING id, message, filepath, created_at`,
+            [resultText, filePath]
+        );
+
         res.send({success : true, message : resultText}); 
+        console.log(resultText);    
+
+        
 
     } catch(err){
         res.status(500).send({ success : false, message : err.message});
     }
+
 });
 
 export default router;
