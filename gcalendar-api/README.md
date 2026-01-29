@@ -70,6 +70,7 @@
 | :--- | :--- | :--- | :--- |
 | Image | `POST` | `/analyze/image` | 이미지 분석 후 JSON 저장 및 DB 로그 생성 |
 | Text | `POST` | `/analyze/text` | 텍스트 분석 후 JSON 저장 및 DB 로그 생성 |
+| Multi | `POST` | `/analyze/multi` | 텍스트 및 이미지 분석 후 JSON 저장 및 DB 로그 생성 |
 
 ### 라이선스
 이 프로젝트는 MIT License를 따릅니다.
@@ -124,7 +125,7 @@
 5. **Database Setup**
     1. Create Database: `CREATE DATABASE gcalendar_db;`
     2. Create `logs` Table:
-        ```sql
+        ```sql  
         CREATE TABLE logs (
             id bigint generated always as identity primary key, 
             messagepath varchar(255) not null, -- Path to JSON file
@@ -145,6 +146,7 @@
 | :--- | :--- | :--- | :--- |
 | Image | `POST` | `/analyze/image` | Analyzes image, saves JSON, and creates DB log |
 | Text | `POST` | `/analyze/text` | Analyzes text, saves JSON, and creates DB log |
+| Multi | `POST` | `/analyze/multi` | Analyzes both text and image, saves JSON, and creates DB log |
 
 ### License
 This project is licensed under the MIT License.
