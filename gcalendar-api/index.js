@@ -16,6 +16,7 @@ app.use(express.json());
 
 // Routers
 app.use('/analyze', analyzer);
+app.use('/uploads', express.static("uploads"));
 
 // Start Server
 app.listen(PORT, async () => {

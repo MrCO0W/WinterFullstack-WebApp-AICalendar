@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 
 /**
@@ -103,7 +103,6 @@ function parseEventRange(ev) {
   const start = new Date(startStr);
   const endExclusive = new Date(endStr);
 
-  // all-day는 end.date가 "다음날 00:00(exclusive)"로 오는 것이 일반적 → inclusive로 보정
   let endInclusive;
   if (isAllDay) {
     endInclusive = new Date(endExclusive);
@@ -141,22 +140,6 @@ function isEventOnDay(ev, dayDate) {
   return !(range.endInclusive < dayStart || range.start > dayEnd);
 }
 
-async function analyzeDroppedImage(file) {
-  const formData = new FormData();
-  formData.append("image", file); // ✅ multer.single('image')
-
-  const res = await fetch("http://localhost:3001/analyze/image", {
-    method: "POST",
-    body: formData,
-  });
-
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`analyze 실패 ${res.status}: ${txt}`);
-  }
-
-  return await res.json(); // { success: true, message: "..." }
-}
 
 /* =========================
  * IndexedDB simple KV store
@@ -178,6 +161,41 @@ function idbOpen() {
     req.onsuccess = () => resolve(req.result);
   });
 }
+
+function openErrorWindow(title, message) {
+  const w = window.open("", "_blank", "width=520,height=420");
+  if (!w) {
+    alert(`${title}\n\n${message}\n\n(팝업 차단됨)`);
+    return;
+  }
+
+  const esc = (s) =>
+    String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+
+  w.document.open();
+  w.document.write(`
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>${esc(title)}</title>
+    </head>
+    <body style="font-family: system-ui; padding: 16px;">
+      <h2 style="margin: 0 0 12px;">${esc(title)}</h2>
+      <pre style="white-space: pre-wrap; background:#f3f4f6; padding:12px; border-radius:10px;">${esc(
+        message
+      )}</pre>
+    </body>
+    </html>
+  `);
+  w.document.close();
+}
+
 
 async function idbGet(key) {
   const db = await idbOpen();
@@ -324,6 +342,7 @@ async function fetchEventsBulk({ authHeaders, range, limit = 2000 }) {
  * ========================= */
 export default function CalendarMonthBoard() {
   const navigate = useNavigate();
+  const gridRef = useRef(null);
   const accessToken = sessionStorage.getItem("google_access_token");
   const loginSessionId = sessionStorage.getItem("login_session_id") ?? "0";
 
@@ -340,14 +359,106 @@ export default function CalendarMonthBoard() {
   
   const [droppedFile, setDroppedFile] = useState(null);
 
+  const [isLogOpen, setIsLogOpen] = useState(false);
+  const [logs, setLogs] = useState([]);
+  const [logsStatus, setLogsStatus] = useState("");
+  const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
+  const [isProcessingText, setIsProcessingText] = useState(false);
+  const [isCreatingEvent, setIsCreatingEvent] = useState(false);
+  const [autoSubmit, setAutoSubmit] = useState(false);
+  const submitLockRef = useRef(false); 
+
+
+  async function fetchLogs(limit = 50) {
+    const res = await fetch("http://localhost:3001/analyze/logs?limit=50")
+    if (!res.ok) throw new Error(`logs fetch 실패 ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    if (!data?.success) throw new Error(data?.message ?? "logs fetch 실패");
+    return data.logs ?? [];
+  }
+
+
+  async function openLogs() {
+    try {
+      setLogsStatus("로그 불러오는 중...");
+      setIsLogOpen(true);
+      const rows = await fetchLogs(50);
+      setLogs(rows);
+      setLogsStatus("");
+    } catch (e) {
+      setLogsStatus(String(e));
+    }
+  }
+
+  async function clearLogsOnServer() {
+    const res = await fetch("http://localhost:3001/analyze/logs", {
+      method: "DELETE",
+    });
+    if (!res.ok) throw new Error(`logs delete 실패 ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    if (!data?.success) throw new Error(data?.message ?? "logs delete 실패");
+    return true;
+  }
+
+  async function handleClearLogs() {
+    const ok = window.confirm("모든 로그를 삭제하시겠습니까?");
+    if (!ok) return;
+
+    try {
+      setLogsStatus("로그 삭제 중...");
+      await clearLogsOnServer();
+
+      // 즉시 UI 반영
+      setLogs([]);
+      setLogsStatus(""); 
+    } catch (e) {
+      setLogsStatus(String(e));
+    }
+  }
+
+  function mapGeminiErrorMessage(err) {
+    const msg = String(err?.message ?? err ?? "");
+
+    const tokenLike =
+      /429|too\s*many\s*requests|rate\s*limit|quota|insufficient|resource\s*exhausted|exceeded|tokens?|max.*tokens?|context.*length/i.test(
+        msg
+      );
+
+    if (tokenLike) return "Gemini 토큰 부족";
+
+    return msg || "오류가 발생했습니다.";
+  }
+
+  function resetLeftInputs() {
+    setDraft({
+      __logId: null,
+      summary: "",
+      description: "",
+      location: "",
+      start: { date: "", dateTime: "", timeZone: "Asia/Seoul" },
+      end: { date: "", dateTime: "", timeZone: "Asia/Seoul" },
+    });
+    setNlText("");
+    setDroppedFile(null);
+
+    // objectURL 정리(메모리 누수 방지)
+    setDroppedImageUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+  }
+
+
 
   const [draft, setDraft] = useState({
+    __logId: null,
     summary: "",
     description: "",
     location: "",
     start: { date: "", dateTime: "", timeZone: "Asia/Seoul" },
     end: { date: "", dateTime: "", timeZone: "Asia/Seoul" },
   });
+
 
   const [nlText, setNlText] = useState("");
 
@@ -462,6 +573,68 @@ export default function CalendarMonthBoard() {
     return await res.json(); 
   }
 
+  function buildNextDraft(prev, extracted, logId = null) {
+    return {
+      ...prev,
+      __logId: logId ?? prev.__logId ?? null,
+      summary: extracted?.summary ?? "",
+      description: extracted?.description ?? "",
+      location: extracted?.location ?? "",
+      start: {
+        ...prev.start,
+        date: extracted?.start?.date ?? "",
+        dateTime: extracted?.start?.time ?? "",
+        timeZone: extracted?.start?.timeZone ?? "Asia/Seoul",
+      },
+      end: {
+        ...prev.end,
+        date: extracted?.end?.date ?? "",
+        dateTime: extracted?.end?.time ?? "",
+        timeZone: extracted?.end?.timeZone ?? "Asia/Seoul",
+      },
+    };
+  }
+
+  async function handleConfirmCreateWithDraft(draftToSubmit) {
+    if (submitLockRef.current) return;
+    submitLockRef.current = true;
+
+    try {
+      setIsCreatingEvent(true);
+      setStatus("등록 중...");
+      const created = await insertEventToGoogleCalendar(draftToSubmit);
+
+      const eventId = created?.id;
+      const logId = draftToSubmit.__logId;
+
+      if (logId && eventId) {
+        await fetch(`http://localhost:3001/analyze/logs/${logId}/event`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ eventId }),
+        });
+      }
+
+      const minimal = pickMinimalEventFields([created])[0];
+      minimal.__logId = logId ?? null;
+
+      setEvents((prev) => upsertEvent(prev, minimal));
+      await upsertEventIntoCache(minimal);
+
+      setStatus("등록 완료");
+      resetLeftInputs();
+    } catch (e) {
+      setStatus(String(e));
+    } finally {
+      setIsCreatingEvent(false); // ✅ 추가
+      submitLockRef.current = false;
+    }
+  }
+
+  async function handleConfirmCreate() {
+    return handleConfirmCreateWithDraft(draft);
+  }
+
   function upsertEvent(list, ev) {
   if (!ev?.id) return [ev, ...list];
   const idx = list.findIndex((x) => x.id === ev.id);
@@ -474,7 +647,6 @@ export default function CalendarMonthBoard() {
   async function upsertEventIntoCache(minimalEvent) {
     const cache = await idbGet(CACHE_KEY);
 
-    // 캐시가 없으면 새로 만듭니다(범위는 현재 선택월 기준으로 대충 잡음)
     if (!cache?.events) {
       const bulkRange = getBulkRangeAround(monthValueFromDate(), 12, 12);
       await idbSet(CACHE_KEY, {
@@ -494,26 +666,6 @@ export default function CalendarMonthBoard() {
       savedAt: Date.now(),
       events: nextEvents,
     });
-  }
-
-
-  async function handleConfirmCreate() {
-    try {
-      setStatus("등록 중...");
-      const created = await insertEventToGoogleCalendar(draft);
-
-      const minimal = pickMinimalEventFields([created])[0];
-
-      // 1) 화면 즉시 갱신(중복 방지 upsert)
-      setEvents((prev) => upsertEvent(prev, minimal));
-
-      // 2) 캐시도 같이 갱신(새로고침해도 유지)
-      await upsertEventIntoCache(minimal);
-
-      setStatus("등록 완료");
-    } catch (e) {
-      setStatus(String(e));
-    }
   }
 
   async function handleDeleteEvent(ev) {
@@ -593,21 +745,13 @@ export default function CalendarMonthBoard() {
     })();
   }, [accessToken, authHeaders, selectedMonth, loginSessionId]);
 
-  useEffect(() => {
-    function handleKeyDown(e) {   
-      if (e.key === "ArrowLeft") { changeMonth(-1); e.preventDefault(); }
-      if (e.key === "ArrowRight") { changeMonth(1); e.preventDefault(); }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
   // 2) 드롭된 이미지 분석
   useEffect(() => {
     if (!droppedFile) return;
 
     (async () => {
       try {
+        setIsAnalyzingImage(true);
         setStatus("이미지 분석 중...");
 
         const res = await fetch("http://localhost:3001/analyze/image", {
@@ -619,38 +763,37 @@ export default function CalendarMonthBoard() {
           })(),
         });
 
-        if (!res.ok) {
-          const txt = await res.text();
-          throw new Error(`analyze 실패 ${res.status}: ${txt}`);
+        // ✅ 항상 본문을 먼저 읽고
+        const rawText = await res.text();
+
+        // ✅ JSON이 아니면 즉시 에러
+        let data;
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          throw new Error("서버 응답이 JSON이 아닙니다.");
         }
 
-        const data = await res.json(); 
-        if (!data?.success) throw new Error(data?.message ?? "analyze 실패");
+        // ✅ HTTP 실패 또는 success:false면 에러
+        if (!res.ok || data?.success === false) {
+          const serverMsg = data?.message ?? data?.error ?? `HTTP ${res.status}`;
+          throw new Error(`${res.status} ${serverMsg}`);
+        }
 
-        const extracted = data.message;   // ✅ 서버 JSON
+        const extracted = data.message;
+        const logId = data.logId;
 
-        setDraft((p) => ({
-          ...p,
-          summary: extracted.summary ?? "",
-          description: extracted.description ?? "",
-          location: extracted.location ?? "",
-          start: {
-            ...p.start,
-            date: extracted.start?.date ?? "",
-            dateTime: extracted.start?.time ?? "",
-            timeZone: extracted.start?.timeZone ?? "Asia/Seoul",
-          },
-          end: {
-            ...p.end,
-            date: extracted.end?.date ?? "",
-            dateTime: extracted.end?.time ?? "",
-            timeZone: extracted.end?.timeZone ?? "Asia/Seoul",
-          },
-        }));
+        setDraft((prev) => {
+          const next = buildNextDraft(prev, extracted, logId);
+          if (autoSubmit) queueMicrotask(() => handleConfirmCreateWithDraft(next));
+          return next;
+        });
 
         setStatus("분석 완료");
       } catch (e) {
-        setStatus(`이미지 분석 실패: ${String(e)}`);
+        alert(`이미지 처리 실패: ${mapGeminiErrorMessage(e)}`);
+      } finally {
+        setIsAnalyzingImage(false);
       }
     })();
   }, [droppedFile]);
@@ -668,6 +811,7 @@ export default function CalendarMonthBoard() {
       {isSidebarOpen && (
         <aside
           style={{
+            position: "relative",
             width: "16.6667%",
             borderRight: "1px solid #e5e7eb",
             padding: 12,
@@ -675,25 +819,63 @@ export default function CalendarMonthBoard() {
             display: "flex",
             flexDirection: "column",
             gap: 12,
-            minHeight: 0, // overflow 안정
+            minHeight: 0,
+            pointerEvents: (isAnalyzingImage || isProcessingText) ? "none" : "auto",
+            opacity: (isAnalyzingImage || isProcessingText || isCreatingEvent) ? 0.5 : 1,
           }}
         >
+        {(isAnalyzingImage || isProcessingText || isCreatingEvent) && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 999999,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              pointerEvents: "none",
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+              <div
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: "50%",
+                  border: "4px solid rgba(0,0,0,0.15)",
+                  borderTopColor: "rgba(0,0,0,0.65)",
+                  animation: "spin 0.8s linear infinite",
+                }}
+              />
+              <div style={{ fontWeight: 800, fontSize: 14 }}>
+                {isAnalyzingImage ? "이미지 처리 중..." : isProcessingText ? "텍스트 처리 중..." : "일정 추가 중..."}
+              </div>
+            </div>
+          </div>
+        )}
+
+
           {/* 상단 1/3: 드래그 앤 드롭 */}
           <div
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
+
               const file = e.dataTransfer.files?.[0] ?? null;
               if (!file) return;
               if (!file.type?.startsWith("image/")) return;
 
-              setDroppedFile(file);                 // ✅ 파일 저장
-              const url = URL.createObjectURL(file);
-              setDroppedImageUrl(url);              // 미리보기 유지
-            }}
+              setDroppedFile(file);
 
+              // 기존 preview url 정리 후 새 url 생성
+              setDroppedImageUrl((prev) => {
+                if (prev) URL.revokeObjectURL(prev);
+                return URL.createObjectURL(file);
+              });
+            }}
             style={{
-              flex: 2, // ✅ 전체(1+2) 중 1 = 1/3
+              position: "relative",
+              flex: 2,
               border: "2px dashed #cbd5e1",
               borderRadius: 12,
               background: "#f8fafc",
@@ -706,6 +888,7 @@ export default function CalendarMonthBoard() {
               minHeight: 0,
             }}
           >
+
             {droppedImageUrl ? (
               <img
                 src={droppedImageUrl}
@@ -858,13 +1041,12 @@ export default function CalendarMonthBoard() {
               />
             </div>
 
-            {/* 자연어 입력 (맨 밑 고정 느낌) */}
             <div style={{ marginTop: "auto", display: "grid", gap: 8, paddingTop: 10, borderTop: "1px solid #e5e7eb" }}>
               <div style={{ fontWeight: 800 }}>자연어 입력</div>
               <textarea
                 value={nlText}
                 onChange={(e) => setNlText(e.target.value)}
-                placeholder="예: 다음주 화요일 3시~4시 연구실 미팅, 장소는 약대 301호"
+                placeholder="예: 2026-01-30 금요일 10시~12시 연구실 미팅, 장소는 IT-5 소회의실"
                 rows={3}
                 style={{
                   width: "90%",
@@ -877,30 +1059,30 @@ export default function CalendarMonthBoard() {
               />
               <button
                 onClick={async () => {
+                  const text = (nlText ?? "").trim();
+                  if (!text) return;
                   try {
-                    setStatus("텍스트 분석 중...");
-                    const data = await sendNaturalLanguage(nlText);
+                    setIsProcessingText(true);
 
+                    const data = await sendNaturalLanguage(nlText);
                     if (!data?.success) throw new Error(data?.message ?? "text analyze 실패");
 
-                    // 서버가 message를 "객체"로 주면 그대로, "문자열"이면 JSON.parse
                     let extracted = data.message;
-                    if (typeof extracted === "string") {
-                      extracted = JSON.parse(extracted);
-                    }
+                    if (typeof extracted === "string") extracted = JSON.parse(extracted);
 
-                    setDraft((p) => ({
-                      ...p,
-                      summary: extracted.summary ?? "",
-                      description: extracted.description ?? "",
-                      location: extracted.location ?? "",
-                      start: { ...p.start, ...(extracted.start ?? {}) },
-                      end: { ...p.end, ...(extracted.end ?? {}) },
-                    }));
+                    setDraft((prev) => {
+                      const next = buildNextDraft(prev, extracted, null);
 
-                    setStatus("텍스트 분석 완료");
+                      if (autoSubmit) {
+                        queueMicrotask(() => handleConfirmCreateWithDraft(next));
+                      }
+                      return next;
+                    });
+
                   } catch (e) {
-                    setStatus(`전송 실패: ${String(e)}`);
+                    alert(`텍스트 처리 실패: ${mapGeminiErrorMessage(e)}`);
+                  } finally {
+                    setIsProcessingText(false);
                   }
                 }}
                 style={{
@@ -960,8 +1142,39 @@ export default function CalendarMonthBoard() {
           </div>
 
           {/* 오른쪽: status */}
-          <div style={{ justifySelf: "end", whiteSpace: "pre-wrap" }}>
-            {status}
+          <div style={{ justifySelf: "end", display: "flex", alignItems: "center", gap: 10 }}>
+            <button
+              onClick={() => setAutoSubmit((v) => !v)}
+              style={{
+                border: autoSubmit ? "1px solid #3b82f6" : "1px solid #e5e7eb",
+                background: autoSubmit ? "#dbeafe" : "transparent",
+                color: autoSubmit ? "#1d4ed8" : "#374151",
+                padding: "9px 14px",
+                borderRadius: 999,
+                cursor: "pointer",
+                fontWeight: 800,
+                fontSize: 12,
+                transition: "all 0.15s ease",
+              }}
+              aria-pressed={autoSubmit}
+            >
+              자동 등록
+            </button>
+
+            <button
+              onClick={openLogs}
+              style={{
+                border: "1px solid #e5e7eb",
+                background: "transparent",
+                padding: "8px 10px",
+                borderRadius: 10,
+                cursor: "pointer",
+                fontWeight: 800,
+                fontSize: 12,
+              }}
+            >
+              로그 확인
+            </button>
           </div>
         </div>
 
@@ -973,25 +1186,52 @@ export default function CalendarMonthBoard() {
             borderBottom: "1px solid #e5e7eb",
           }}
         >
-          {["일", "월", "화", "수", "목", "금", "토"].map((w) => (
-            <div key={w} style={{ padding: 8, fontWeight: 700, textAlign: "center" }}>
-              {w}
-            </div>
-          ))}
+          {["일", "월", "화", "수", "목", "금", "토"].map((w, idx) => (
+          <div
+            key={w}
+            style={{
+              padding: 8,
+              fontWeight: 700,
+              textAlign: "center",
+              color: idx === 0 ? "#dc2626" : idx === 6 ? "#2563eb" : "#111827", // 일=빨강, 토=파랑
+            }}
+          >
+            {w}
+          </div>
+        ))}
         </div>
 
         {/* Grid */}
         <div
+          ref={gridRef}
+          tabIndex={0}
+          role="application"
+          aria-label="캘린더 격자"
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") {
+              e.preventDefault();
+              changeMonth(-1);
+            } else if (e.key === "ArrowRight") {
+              e.preventDefault();
+              changeMonth(1);
+            }
+          }}
+          onMouseDown={() => {
+            // 클릭하면 격자가 포커스를 먹어서 그때부터 방향키 동작
+            gridRef.current?.focus();
+          }}
           style={{
             flex: 1,
             display: "grid",
             gridTemplateColumns: "repeat(7, 1fr)",
             gridAutoRows: "1fr",
+            outline: "none", // 포커스 테두리 보기 싫으면
           }}
         >
           {monthGrid.map((day) => {
             const inMonth = day.getMonth() === month - 1;
             const dayEvents = events.filter((ev) => isEventOnDay(ev, day));
+            const dow = day.getDay(); // 0=일, 6=토
 
             return (
               <div
@@ -1015,7 +1255,13 @@ export default function CalendarMonthBoard() {
                       justifyContent: "center",
                       fontWeight: 700,
                       background: sameDay(day, today) ? "#282d3a" : "transparent",
-                      color: sameDay(day, today) ? "#fff" : "#111827",
+                      color: sameDay(day, today)
+                        ? "#fff"
+                        : dow === 0
+                        ? "#dc2626"   // 일요일
+                        : dow === 6
+                        ? "#2563eb"   // 토요일
+                        : "#111827",
                       opacity: inMonth ? 1 : 0.45,
                     }}
                   >
@@ -1089,10 +1335,17 @@ export default function CalendarMonthBoard() {
             }}
             onDelete={handleDeleteEvent}   // ✅ 추가
           />
-
+          <LogsModal
+            open={isLogOpen}
+            logs={logs}
+            status={logsStatus}
+            onClose={() => setIsLogOpen(false)}
+            onClear={handleClearLogs}
+          />
 
     </main>
   </div>
+
   );
 }
 
@@ -1156,16 +1409,61 @@ function getEventPalette(ev, colors, primaryCalColorId) {
 }
 
 function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete }) {
+  const [rawLog, setRawLog] = useState(null);
   const [showRaw, setShowRaw] = useState(false);
+
+  const handleClose = () => {
+    setShowRaw(false);
+    setRawLog(null);
+    onClose();
+  };
+
+  async function loadRawFromDB() {
+    // 1) logId가 있으면 그걸 우선 사용
+    let logId = event?.__logId ?? null;
+
+    // 2) 없으면 eventId로 DB에서 찾기
+    if (!logId && event?.id) {
+      const a = await fetch(`http://localhost:3001/analyze/logs/by-event/${event.id}`);
+      if (a.ok) {
+        const ad = await a.json();
+        logId = ad?.log?.id ?? null;
+      }
+    }
+
+    // 3) 그래도 없으면 "연결된 로그 없음"
+    if (!logId) {
+      setRawLog({ noLog: true, plan: null, imgUrl: null });
+      return;
+    }
+
+    // 4) raw 로드
+    const b = await fetch(`http://localhost:3001/analyze/logs/${logId}/raw`);
+    if (!b.ok) {
+      setRawLog({ noLog: true, plan: null, imgUrl: null });
+      return;
+    }
+
+    const bd = await b.json();
+    if (!bd?.success) {
+      setRawLog({ noLog: true, plan: null, imgUrl: null });
+      return;
+    }
+
+    const imgPath = bd.raw?.imagepath ?? null;
+    const imgUrl = imgPath ? `http://localhost:3001/${imgPath.replace(/\\/g, "/")}` : null;
+
+    setRawLog({ noLog: false, plan: bd.raw?.plan ?? null, imgUrl });
+  }
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") handleClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open || !event) return null;
 
@@ -1174,11 +1472,11 @@ function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete 
   const location = event.location ?? "-";
   const when = formatWhenBySchema(event);
 
-  const { bg, fg } = getEventPalette(event, colors, primaryCalColorId);
+  const { bg } = getEventPalette(event, colors, primaryCalColorId);
 
   return (
     <div
-      onClick={onClose}
+      onClick={handleClose}
       style={{
         position: "fixed",
         inset: 0,
@@ -1200,7 +1498,7 @@ function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete 
           boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
         }}
       >
-        {/* Header (그대로) */}
+        {/* Header */}
         <div
           style={{
             padding: "14px 16px",
@@ -1226,7 +1524,7 @@ function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete 
           </div>
 
           <button
-            onClick={onClose}
+            onClick={handleClose}
             style={{
               border: "none",
               background: "transparent",
@@ -1242,7 +1540,7 @@ function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete 
           </button>
         </div>
 
-        {/* Body (그대로) */}
+        {/* Body */}
         <div style={{ padding: 16, display: "grid", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 10 }}>
             <div style={{ opacity: 0.7, fontWeight: 700 }}>summary</div>
@@ -1265,6 +1563,7 @@ function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete 
           </div>
         </div>
 
+        {/* Footer */}
         <div
           style={{
             padding: 16,
@@ -1275,9 +1574,16 @@ function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete 
             gap: 8,
           }}
         >
-          {/* 왼쪽: 원본 데이터 */}
           <button
-            onClick={() => setShowRaw((v) => !v)}
+            onClick={async () => {
+              if (showRaw) {
+                setShowRaw(false);
+                setRawLog(null);
+                return;
+              }
+              setShowRaw(true);
+              await loadRawFromDB();
+            }}
             style={{
               border: "1px solid #e5e7eb",
               background: "transparent",
@@ -1290,10 +1596,11 @@ function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete 
             {showRaw ? "원본 데이터 닫기" : "원본 데이터 보기"}
           </button>
 
-          {/* 오른쪽: 삭제 + 닫기 */}
           <div style={{ display: "flex", gap: 8 }}>
             <button
-              onClick={() => onDelete(event)}   // ✅ 삭제 호출
+              onClick={() => {onDelete(event)
+                  setShowRaw(false);
+                  setRawLog(null);}}
               style={{
                 border: "1px solid #fecaca",
                 background: "#fee2e2",
@@ -1308,7 +1615,7 @@ function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete 
             </button>
 
             <button
-              onClick={onClose}
+              onClick={handleClose}
               style={{
                 border: "1px solid #e5e7eb",
                 background: "transparent",
@@ -1323,26 +1630,190 @@ function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete 
           </div>
         </div>
 
-
+        {/* Raw */}
         {showRaw && (
-          <div style={{ padding: 16, paddingTop: 0 }}>
-            <pre
-              style={{
-                margin: 0,
-                padding: 12,
-                maxHeight: 240,
-                overflow: "auto",
-                background: "#f9fafb",
-                borderRadius: 8,
-                fontSize: 12,
-                lineHeight: 1.4,
-                border: "1px solid #e5e7eb",
-              }}
-            >
-              {JSON.stringify(event, null, 2)}
-            </pre>
+          <div style={{ padding: 16, paddingTop: 0, display: "grid", gap: 12 }}>
+            {rawLog?.noLog ? (
+              <div style={{ opacity: 0.7, fontWeight: 600 }}>연결된 로그가 없습니다.</div>
+            ) : (
+              <>
+                {rawLog?.imgUrl ? (
+                  <img
+                    src={rawLog.imgUrl}
+                    alt="원본 이미지"
+                    style={{ maxWidth: "100%", border: "1px solid #e5e7eb", borderRadius: 8 }}
+                  />
+                ) : (
+                  <div style={{ opacity: 0.7 }}>원본 이미지 없음</div>
+                )}
+              </>
+            )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+
+function formatKST(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(
+    d.getHours()
+  )}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
+function LogsModal({ open, logs, status, onClose, onClear }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.35)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 10000,
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(720px, 100%)",
+          background: "#fff",
+          borderRadius: 14,
+          overflow: "hidden",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+        }}
+      >
+        <div
+          style={{
+            padding: "14px 16px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            borderBottom: "1px solid #e5e7eb",
+          }}
+        >
+          <div style={{ fontWeight: 800, fontSize: 16 }}>이벤트 로그</div>
+          <button
+            onClick={onClose}
+            style={{
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: 18,
+              lineHeight: 1,
+              padding: 8,
+            }}
+            aria-label="닫기"
+            title="닫기"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div style={{ padding: 16, display: "grid", gap: 10 }}>
+          {status ? (
+            <div style={{ whiteSpace: "pre-wrap" }}>{status}</div>
+          ) : null}
+
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 220px",
+                gap: 0,
+                padding: "10px 12px",
+                fontWeight: 800,
+                background: "#f9fafb",
+                borderBottom: "1px solid #e5e7eb",
+              }}
+            >
+              <div>제목</div>
+              <div>추가 시간</div>
+            </div>
+
+            <div style={{ maxHeight: 420, overflow: "auto" }}>
+              {(logs ?? []).map((row) => (
+                <div
+                  key={row.id}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 220px",
+                    padding: "10px 12px",
+                    borderBottom: "1px solid #f1f5f9",
+                    fontSize: 13,
+                  }}
+                >
+                  <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {row.summary ?? "-"}
+                  </div>
+                  <div style={{ whiteSpace: "nowrap" }}>{formatKST(row.created_at)}</div>
+                </div>
+              ))}
+
+              {(!logs || logs.length === 0) && !status && (
+                <div style={{ padding: 12, opacity: 0.7 }}>로그가 없습니다.</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            padding: 16,
+            borderTop: "1px solid #e5e7eb",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <button
+            onClick={onClear}
+            disabled={!logs || logs.length === 0}
+            style={{
+              border: "1px solid #fecaca",
+              background: (!logs || logs.length === 0) ? "#f9fafb" : "#fee2e2",
+              color: (!logs || logs.length === 0) ? "#9ca3af" : "#991b1b",
+              padding: "10px 12px",
+              borderRadius: 10,
+              cursor: (!logs || logs.length === 0) ? "not-allowed" : "pointer",
+              fontWeight: 800,
+            }}
+          >
+            로그 삭제
+          </button>
+
+          <button
+            onClick={onClose}
+            style={{
+              border: "1px solid #e5e7eb",
+              background: "transparent",
+              padding: "10px 12px",
+              borderRadius: 10,
+              cursor: "pointer",
+              fontWeight: 700,
+            }}
+          >
+            닫기
+          </button>
+        </div>
       </div>
     </div>
   );
