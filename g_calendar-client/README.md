@@ -1,70 +1,59 @@
-# Getting Started with Create React App
+# G-Calendar Client
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+<details>
+<summary><strong>🇰🇷 한국어</strong></summary>
 
-## Available Scripts
+### 프로젝트 개요
 
-In the project directory, you can run:
+G-Calendar 클라이언트는 Google 캘린더와 상호작용하기 위한 웹 인터페이스입니다. 사용자가 Google 계정으로 인증하고, 월별 레이아웃으로 캘린더를 보고, AI 기반 기능을 활용하여 이미지나 자연어 텍스트로부터 이벤트를 생성할 수 있게 해줍니다.
 
-### `npm start`
+이 애플리케이션은 별도의 백엔드 API와 통신하며, 이 API는 Gemini AI를 통한 이미지/텍스트 분석 및 데이터베이스와의 상호작용을 처리합니다.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+### 핵심 기능
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+- **Google 인증**: OAuth2를 사용하여 사용자의 Google 계정에 안전하게 연결하고 캘린더 데이터에 접근합니다.
+- **월별 캘린더 뷰**: 반응형 전체 화면 월별 그리드에 이벤트를 표시합니다.
+- **이벤트 관리**:
+  - 기존 이벤트에 대한 원본 데이터 열람하기.
+  - 캘린더에서 직접 이벤트 삭제.
+- **AI 기반 이벤트 생성**:
+  - **이미지 분석**: 포스터나 스크린샷과 같은 이미지를 드래그 앤 드롭하여 AI가 이벤트 세부 정보(제목, 설명, 날짜, 시간, 장소)를 자동으로 파싱하고 입력하게 합니다.
+  - **텍스트 분석**: 자연어 문장(예: "내일 오후 2시부터 3시까지 사무실에서 팀 미팅")을 입력하여 AI가 해당 캘린더 이벤트를 생성하게 합니다.
+- **성능**:
+  - 원활한 탐색을 위해 시작일 앞뒤 6달 간 이벤트 데이터를 미리 가져옵니다.
+  - 빠른 로딩을 위해 IndexedDB에 데이터를 캐시합니다.
+- **로깅**: AI 기반 이벤트 생성 기록을 확인합니다.
 
-### `npm test`
+### 설치 방법
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+1. **저장소 클론**
 
-### `npm run build`
+   ```bash
+   git clone <repository-url>
+   cd WinterFullstack-WebApp-AICalendar/g_calendar-client
+   ```
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+2. **의존성 설치**
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+   ```bash
+   npm install
+   ```
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+3. **애플리케이션 실행**
 
-### `npm run eject`
+   ```bash
+   npm start
+   ```
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+   애플리케이션은 [http://localhost:3000](http://localhost:3000)에서 실행됩니다.
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+   **참고**: 이 클라이언트는 AI 기능과 로깅이 올바르게 작동하려면 `gcalendar-api` 백엔드 서버가 `http://localhost:3001`에서 실행되고 있어야 합니다.
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+### 사용 가능한 스크립트
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+프로젝트 디렉터리에서 다음을 실행할 수 있습니다:
 
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+- `npm start`: 개발 모드에서 앱을 실행합니다.
+- `npm test`: 테스트 러너를 실행합니다.
+- `npm run build`: 프로덕션용으로 앱을 빌드합니다.
+- `npm run eject`: Create React App의 관리 설정에서 벗어납니다.
