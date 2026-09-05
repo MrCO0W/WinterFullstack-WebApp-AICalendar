@@ -57,3 +57,29 @@ G-Calendar 클라이언트는 Google 캘린더와 상호작용하기 위한 웹 
 - `npm test`: 테스트 러너를 실행합니다.
 - `npm run build`: 프로덕션용으로 앱을 빌드합니다.
 - `npm run eject`: Create React App의 관리 설정에서 벗어납니다.
+</details>
+
+## Google 연결 설정과 현재 제한
+
+현재 OAuth 클라이언트 ID는 `.env`의 `REACT_APP_GOOGLE_CLIENT_ID`에서 읽습니다. 앱에 사용하는 ID가 속한 Google Cloud 프로젝트에서 로그인 계정을 테스트 사용자로 추가해야 합니다. `403 access_denied`와 테스터 제한 메시지가 나오면 [루트 README의 Google OAuth 설정](../README.md#google-oauth-설정과-로그인-오류-해결)을 참고하세요.
+
+현재 `SCOPE`는 `calendar.readonly`이므로 조회 권한만 요청합니다. 위에서 소개한 등록·삭제 기능의 코드는 구현되어 있지만, 실제 쓰기 작업에는 추가 권한 요청과 재동의가 필요합니다.
+
+`npm install`은 이 폴더(`g_calendar-client`)에서 실행합니다. `node_modules`는 Git에서 제외하고 `package.json`과 `package-lock.json`은 포함합니다. 기존 `src/App.test.js`는 이전 기본 화면을 대상으로 하므로 현재 화면에 맞춘 테스트 수정이 필요합니다.
+
+## 클라이언트 환경 변수
+
+최초 설치 시 `g_calendar-client` 폴더에서 예시 파일을 복사하고 값을 설정합니다. 기존 `.env`가 있다면 덮어쓰지 않고 필요한 값만 수정합니다.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+```dotenv
+REACT_APP_GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
+REACT_APP_API_BASE_URL=http://localhost:3001
+```
+
+설정 변경 후 `npm start`를 재시작해야 합니다. 배포 빌드에도 빌드 시점의 값이 반영됩니다. 실제 `.env`는 Git에서 제외하고 값이 없는 `.env.example`을 공유합니다.
+
+`REACT_APP_*`는 브라우저 코드에 포함되는 공개 설정입니다. OAuth 클라이언트 ID는 공개 식별자이며, `.env`로 옮겨도 브라우저에서 숨겨지지 않습니다. Gemini API 키, Google client secret, DB 비밀번호는 클라이언트 환경 변수에 넣지 말고 백엔드에서 관리합니다.

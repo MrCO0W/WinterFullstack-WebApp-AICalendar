@@ -3,9 +3,11 @@ import { useNavigate } from "react-router-dom";
 
 /*global google*/
 
-const CLIENT_ID =
-  "176306222059-571sa9nd4ele6ugemmjn8h9rvrnm13ej.apps.googleusercontent.com";
-const SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const CLIENT_ID = (process.env.REACT_APP_GOOGLE_CLIENT_ID || "").trim();
+const SCOPE = [
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events.owned",
+].join(" ");
 
 function waitForOAuth2(timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
@@ -34,6 +36,7 @@ export default function ConnectCalendarPage() {
     setError("");
 
     try {
+      if (!CLIENT_ID) throw new Error("Google 연결 설정이 없습니다. 클라이언트 .env를 설정하고 개발 서버를 재시작하세요.");
       await waitForOAuth2(8000);
 
       if (!tokenClientRef.current) {

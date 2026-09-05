@@ -45,7 +45,7 @@ curl.exe http://localhost:3001/analyze/multi -F "image=@poster.png" -F "prompt=�
 }
 ```
 
-응답에는 저장 경로나 로그 ID가 포함되지 않습니다. Google Calendar에 실제 일정을 등록하는 기능은 없습니다.
+성공 응답에는 위 필드 외에 저장된 로그 ID인 `logId`가 포함됩니다. Google Calendar 등록은 클라이언트가 Google REST API를 직접 호출합니다.
 
 ### 오류
 
@@ -64,7 +64,7 @@ curl.exe http://localhost:3001/analyze/multi -F "image=@poster.png" -F "prompt=�
 
 서버 실행 후 `index.html`을 브라우저에서 열어 이미지 업로드를 확인할 수 있습니다. Express가 이 페이지를 제공하지는 않습니다. 페이지의 API 주소는 `http://localhost:3001/analyze/image`로 고정되어 있습니다.
 
-현재 코드는 파일 저장과 DB 삽입 완료를 기다리지 않습니다. 성공 응답 외에 실제 파일과 DB 기록을 각각 확인하세요.
+현재 분석 API는 파일 저장과 DB 삽입 완료를 기다린 뒤 응답합니다. 실제 파일과 DB 기록을 함께 확인할 수 있습니다.
 
 ```sql
 SELECT id, messagepath, imagepath, created_at
@@ -81,3 +81,15 @@ LIMIT 10;
 - `Cannot GET /`: 루트 경로는 구현되지 않았습니다. 위 POST API를 사용합니다.
 
 구현 제한과 라이선스는 [루트 README](../README.md)를 참고하세요.
+
+## 분석 기록 API
+
+| 메서드 | 경로 | 역할 |
+| --- | --- | --- |
+| GET | `/analyze/logs?limit=50` | 최근 기록 조회, 최대 200개 |
+| PATCH | `/analyze/logs/:id/event` | JSON 본문의 `eventId`를 로그에 연결 |
+| GET | `/analyze/logs/by-event/:eventId` | Google 이벤트에 연결된 최근 로그 조회 |
+| GET | `/analyze/logs/:id/raw` | 원본 일정 JSON과 이미지 경로 조회 |
+| DELETE | `/analyze/logs` | 전체 로그 및 연결된 파일 삭제 |
+
+이미지와 JSON 파일은 `/uploads` 정적 경로로 제공됩니다. 현재 기록 API는 사용자별 인증·분리가 없으며 전체 삭제는 모든 로그에 적용됩니다. DB에는 `summary`, `event_id` 컬럼도 필요합니다. 신규·기존 DB 설정은 [루트 README](../README.md)를 따르세요.

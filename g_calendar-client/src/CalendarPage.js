@@ -1,3 +1,4 @@
+import { API_BASE_URL } from "./config";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -370,7 +371,7 @@ export default function CalendarMonthBoard() {
 
 
   async function fetchLogs(limit = 50) {
-    const res = await fetch("http://localhost:3001/analyze/logs?limit=50")
+    const res = await fetch(`${API_BASE_URL}/analyze/logs?limit=50`)
     if (!res.ok) throw new Error(`logs fetch 실패 ${res.status}: ${await res.text()}`);
     const data = await res.json();
     if (!data?.success) throw new Error(data?.message ?? "logs fetch 실패");
@@ -391,7 +392,7 @@ export default function CalendarMonthBoard() {
   }
 
   async function clearLogsOnServer() {
-    const res = await fetch("http://localhost:3001/analyze/logs", {
+    const res = await fetch(`${API_BASE_URL}/analyze/logs`, {
       method: "DELETE",
     });
     if (!res.ok) throw new Error(`logs delete 실패 ${res.status}: ${await res.text()}`);
@@ -608,7 +609,7 @@ export default function CalendarMonthBoard() {
       const logId = draftToSubmit.__logId;
 
       if (logId && eventId) {
-        await fetch(`http://localhost:3001/analyze/logs/${logId}/event`, {
+        await fetch(`${API_BASE_URL}/analyze/logs/${logId}/event`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ eventId }),
@@ -692,7 +693,7 @@ export default function CalendarMonthBoard() {
 
   
   async function sendNaturalLanguage(text) {
-    const res = await fetch("http://localhost:3001/analyze/text", {
+    const res = await fetch(`${API_BASE_URL}/analyze/text`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
@@ -754,7 +755,7 @@ export default function CalendarMonthBoard() {
         setIsAnalyzingImage(true);
         setStatus("이미지 분석 중...");
 
-        const res = await fetch("http://localhost:3001/analyze/image", {
+        const res = await fetch(`${API_BASE_URL}/analyze/image`, {
           method: "POST",
           body: (() => {
             const fd = new FormData();
@@ -1424,7 +1425,7 @@ function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete 
 
     // 2) 없으면 eventId로 DB에서 찾기
     if (!logId && event?.id) {
-      const a = await fetch(`http://localhost:3001/analyze/logs/by-event/${event.id}`);
+      const a = await fetch(`${API_BASE_URL}/analyze/logs/by-event/${event.id}`);
       if (a.ok) {
         const ad = await a.json();
         logId = ad?.log?.id ?? null;
@@ -1438,7 +1439,7 @@ function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete 
     }
 
     // 4) raw 로드
-    const b = await fetch(`http://localhost:3001/analyze/logs/${logId}/raw`);
+    const b = await fetch(`${API_BASE_URL}/analyze/logs/${logId}/raw`);
     if (!b.ok) {
       setRawLog({ noLog: true, plan: null, imgUrl: null });
       return;
@@ -1451,7 +1452,7 @@ function EventModal({ open, event, colors, primaryCalColorId, onClose, onDelete 
     }
 
     const imgPath = bd.raw?.imagepath ?? null;
-    const imgUrl = imgPath ? `http://localhost:3001/${imgPath.replace(/\\/g, "/")}` : null;
+    const imgUrl = imgPath ? `${API_BASE_URL}/${imgPath.replace(/\\/g, "/")}` : null;
 
     setRawLog({ noLog: false, plan: bd.raw?.plan ?? null, imgUrl });
   }
