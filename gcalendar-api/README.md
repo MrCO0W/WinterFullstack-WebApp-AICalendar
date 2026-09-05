@@ -1,153 +1,83 @@
-# Backend API - GCalendar APP
+# AI Calendar API
 
-## 📄 README (Language Toggle)
+Express 5, Google GenAI SDK, Multer, PostgreSQL(`pg`) 기반 일정 추출 서버입니다. 환경 변수, 업로드 폴더 및 DB 준비는 [루트 README](../README.md)를 참고하세요.
 
-<details>
-<summary><strong>🇰🇷 한국어</strong></summary>
+## 실행
 
-### 프로젝트 개요
-* **이미지 및 텍스트 기반 일정 생성**
-    * 클라이언트로부터 이미지나 텍스트 데이터를 전달받습니다.
-    * Gemini AI를 통해 데이터를 분석하고 Google Calendar API 형식의 JSON을 생성합니다.
-    * 생성된 일정 파일(.json)과 업로드된 이미지는 서버에 저장되며, 해당 경로를 데이터베이스에 로그로 기록합니다.
+`gcalendar-api`에서 `npm install` 후 `npm run dev`로 실행합니다. `npm start`는 자동 재시작 없이 실행합니다. 기본 포트는 `3001`이며 `.env`의 `PORT`로 변경할 수 있습니다. 별도 빌드·자동 테스트 명령은 없습니다.
 
-### 설치 방법
-1. **저장소 클론**
-    ```bash
-    git clone <repository-url>
-    cd gcalendar-api
-    ```
+## API
 
-2. **의존성 설치**
-    ```bash
-    npm install
-    ```
+| 메서드 | 경로 | Content-Type | 입력 |
+| --- | --- | --- | --- |
+| POST | `/analyze/text` | `application/json` | `text`: 필수 텍스트 |
+| POST | `/analyze/image` | `multipart/form-data` | `image`: 필수 파일 한 개 |
+| POST | `/analyze/multi` | `multipart/form-data` | `image`: 필수 파일 한 개, `prompt`: 선택 보충 문구 |
 
-3. **디렉터리 구조 확인**
-    ```text
-    GCalendar
-    ├── gcalendar-api
-    │   ├── uploads
-    │   │   ├── images <-- 업로드된 이미지 저장소
-    │   │   └── plans  <-- Gemini 분석 결과(JSON) 저장소
-    │   ├── .env
-    │   └── ...
-    └── gcalendar-client
-    ```
+복합 분석의 텍스트 필드명은 `prompt`입니다. 모델에는 이 문구를 이미지 정보보다 우선하도록 지시합니다.
 
-4. **환경 변수 설정** (`.env`)
-    ```env
-    DB_HOST=localhost
-    DB_PORT=5432
-    DB_USER=your_db_username
-    DB_PASSWORD=your_db_user_password
-    DB_NAME=gcalendar_db
-    PORT=3001
-    GEMINI_API_KEY=your_gemini_api_key
-    ```
+### 요청 예시 (PowerShell)
 
-5. **DB 설정**
-    1. 데이터베이스 생성: `CREATE DATABASE gcalendar_db;`
-    2. `logs` 테이블 생성:
-        ```sql
-        CREATE TABLE logs (
-            id bigint generated always as identity primary key, 
-            messagepath varchar(255) not null, -- JSON 파일 경로
-            imagepath varchar(255),            -- 이미지 파일 경로 (텍스트 분석 시 NULL)
-            created_at timestamp with time zone default CURRENT_TIMESTAMP
-        );
-        ```
-    3. **권한 부여**:
-        ```sql
-        CREATE USER your_db_username WITH PASSWORD 'your_db_user_password';
-        GRANT ALL PRIVILEGES ON DATABASE gcalendar_db TO your_db_username;
-        GRANT ALL PRIVILEGES ON TABLE logs TO your_db_username;
-        GRANT USAGE, CREATE ON SCHEMA public TO your_db_username;
-        ```
+서버 실행 후 별도 터미널에서 호출합니다. 이미지 예시는 `gcalendar-api`의 샘플 파일을 사용합니다.
 
-### API 엔드포인트
-| 구분 | 메서드 | 엔드포인트 | 설명 |
-| :--- | :--- | :--- | :--- |
-| Image | `POST` | `/analyze/image` | 이미지 분석 후 JSON 저장 및 DB 로그 생성 |
-| Text | `POST` | `/analyze/text` | 텍스트 분석 후 JSON 저장 및 DB 로그 생성 |
-| Multi | `POST` | `/analyze/multi` | 텍스트 및 이미지 분석 후 JSON 저장 및 DB 로그 생성 |
+```powershell
+$body = @{ text = '2026년 9월 10일 오후 2시부터 3시까지 서울에서 팀 회의' } | ConvertTo-Json
+Invoke-RestMethod -Uri 'http://localhost:3001/analyze/text' -Method Post -ContentType 'application/json; charset=utf-8' -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
 
-### 라이선스
-이 프로젝트는 MIT License를 따릅니다.
-</details>
+curl.exe http://localhost:3001/analyze/image -F "image=@poster.png"
+curl.exe http://localhost:3001/analyze/multi -F "image=@poster.png" -F "prompt=장소는 서울로 변경해 주세요"
+```
 
----
+### 성공 응답 예시
 
-<details open>
-<summary><strong>🇺🇸 English</strong></summary>
+실제 내용은 모델 출력에 따라 달라집니다.
 
-### Project Overview
-* **Image & Text-Based Plan Generation**
-    * Receives image or text data from the client.
-    * Analyzes data via Gemini AI and generates JSON formatted for Google Calendar.
-    * Saves the generated plan (.json) and uploaded images to the server, then logs the file paths in the database.
+```json
+{
+  "success": true,
+  "message": {
+    "summary": "팀 회의",
+    "description": "팀 회의 진행",
+    "location": "서울",
+    "start": { "date": "2026-09-10", "time": "14:00", "timeZone": "Asia/Seoul" },
+    "end": { "date": "2026-09-10", "time": "15:00", "timeZone": "Asia/Seoul" }
+  }
+}
+```
 
-### Installation
-1. **Clone the repository**
-    ```bash
-    git clone <repository-url>
-    cd gcalendar-api
-    ```
+응답에는 저장 경로나 로그 ID가 포함되지 않습니다. Google Calendar에 실제 일정을 등록하는 기능은 없습니다.
 
-2. **Install dependencies**
-    ```bash
-    npm install
-    ```
+### 오류
 
-3. **Directory Structure**
-    ```text
-    GCalendar
-    ├── gcalendar-api
-    │   ├── uploads
-    │   │   ├── images <-- Uploaded images storage
-    │   │   └── plans  <-- Parsed JSON results storage
-    │   ├── .env
-    │   └── ...
-    └── gcalendar-client
-    ```
+| 상황 | HTTP 상태 | message |
+| --- | --- | --- |
+| 텍스트 누락 또는 공백 | 400 | `text is required` |
+| 이미지 누락 또는 빈 파일 | 400 | `Image upload failed (empty file)` |
+| 모델 출력 JSON 파싱 실패 | 500 | `Gemini output is not valid JSON` (`raw` 포함) |
+| 분석 중 예외 | 500 | 예외 메시지 |
 
-4. **Environment Variables** (`.env`)
-    ```env
-    DB_HOST=localhost
-    DB_PORT=5432
-    DB_USER=your_db_username
-    DB_PASSWORD=your_db_user_password
-    DB_NAME=gcalendar_db
-    PORT=3001
-    GEMINI_API_KEY=your_gemini_api_key
-    ```
+위 표는 라우트가 처리하는 오류입니다. 업로드 미들웨어 오류 등은 같은 JSON 형식을 보장하지 않습니다.
 
-5. **Database Setup**
-    1. Create Database: `CREATE DATABASE gcalendar_db;`
-    2. Create `logs` Table:
-        ```sql  
-        CREATE TABLE logs (
-            id bigint generated always as identity primary key, 
-            messagepath varchar(255) not null, -- Path to JSON file
-            imagepath varchar(255),            -- Path to image file (NULL for text analysis)
-            created_at timestamp with time zone default CURRENT_TIMESTAMP
-        );
-        ```
-    3. **User & Permissions**:
-        ```sql
-        CREATE USER your_db_username WITH PASSWORD 'your_db_user_password';
-        GRANT ALL PRIVILEGES ON DATABASE gcalendar_db TO your_db_username;
-        GRANT ALL PRIVILEGES ON TABLE logs TO your_db_username;
-        GRANT USAGE, CREATE ON SCHEMA public TO your_db_username;
-        ```
+## 저장 및 수동 확인
 
-### API Endpoints
-| Category | Method | Endpoint | Description |
-| :--- | :--- | :--- | :--- |
-| Image | `POST` | `/analyze/image` | Analyzes image, saves JSON, and creates DB log |
-| Text | `POST` | `/analyze/text` | Analyzes text, saves JSON, and creates DB log |
-| Multi | `POST` | `/analyze/multi` | Analyzes both text and image, saves JSON, and creates DB log |
+이미지는 `uploads/images/`, 결과 JSON은 `uploads/plans/`에 저장합니다. DB `logs`에는 `messagepath`, `imagepath`를 기록하며 텍스트 분석의 `imagepath`는 `NULL`입니다.
 
-### License
-This project is licensed under the MIT License.
-</details>
+서버 실행 후 `index.html`을 브라우저에서 열어 이미지 업로드를 확인할 수 있습니다. Express가 이 페이지를 제공하지는 않습니다. 페이지의 API 주소는 `http://localhost:3001/analyze/image`로 고정되어 있습니다.
+
+현재 코드는 파일 저장과 DB 삽입 완료를 기다리지 않습니다. 성공 응답 외에 실제 파일과 DB 기록을 각각 확인하세요.
+
+```sql
+SELECT id, messagepath, imagepath, created_at
+FROM logs
+ORDER BY created_at DESC
+LIMIT 10;
+```
+
+## 문제 해결
+
+- `ENOENT`: `gcalendar-api`에서 실행 중인지, 두 업로드 폴더가 존재하는지 확인합니다.
+- DB 오류: PostgreSQL 실행 상태, `.env` 값, 해당 DB의 `logs` 테이블 및 소유자를 확인합니다.
+- Gemini 오류: API 키와 코드에 지정된 모델의 계정별 사용 가능 여부를 확인합니다.
+- `Cannot GET /`: 루트 경로는 구현되지 않았습니다. 위 POST API를 사용합니다.
+
+구현 제한과 라이선스는 [루트 README](../README.md)를 참고하세요.

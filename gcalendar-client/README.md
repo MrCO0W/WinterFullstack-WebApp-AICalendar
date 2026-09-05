@@ -1,70 +1,42 @@
-# Getting Started with Create React App
+# AI Calendar Client
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+React 19와 Create React App(`react-scripts` 5) 기반 클라이언트입니다. 현재 `src/App.js`는 React 로고와 `Learn React` 링크를 보여주는 기본 템플릿입니다.
 
-## Available Scripts
+이미지 업로드, 텍스트 입력, 분석 결과 표시, 캘린더 화면 및 백엔드 연동은 미구현입니다. 전체 구성은 [루트 README](../README.md)를 참고하세요.
 
-In the project directory, you can run:
+## 실행
 
-### `npm start`
+저장소 루트에서 실행합니다.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+```powershell
+cd gcalendar-client
+npm install
+npm start
+```
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+기본 주소는 `http://localhost:3000`입니다. 현재 기본 화면은 백엔드 없이 실행할 수 있습니다.
 
-### `npm test`
+## 명령
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+다음 명령은 `gcalendar-client`에서 실행합니다.
 
-### `npm run build`
+| 명령 | 설명 |
+| --- | --- |
+| `npm start` | 개발 서버 실행 |
+| `npm run build` | `build/`에 배포용 정적 파일 생성 |
+| `npm test` | 감시 모드로 테스트 실행 |
+| `npm test -- --watchAll=false` | 테스트 한 번 실행 |
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+기존 테스트는 `Learn React` 링크 표시만 확인하며 분석 API나 서버 통합을 검증하지 않습니다.
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## 주요 파일
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+| 파일 | 역할 |
+| --- | --- |
+| `src/index.js` | React 진입점 |
+| `src/App.js` | 기본 화면 |
+| `src/App.css`, `src/index.css` | 화면 및 전역 스타일 |
+| `src/App.test.js`, `src/setupTests.js` | 기본 테스트 및 설정 |
+| `public/index.html` | HTML 템플릿 |
 
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
-
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+현재 API 주소 환경 변수나 개발 프록시는 설정되어 있지 않습니다. 연동 구현 시 [백엔드 문서](../gcalendar-api/README.md)의 요청 필드와 응답 구조를 참고하세요.
