@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>Image Upload Test</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+    }
+    pre {
+      background: #f4f4f4;
+      padding: 10px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h2>Gemini Image Upload Test</h2>
+
+  <input type="file" id="imageInput" accept="image/*" />
+  <br /><br />
+  <button onclick="upload()">Upload</button>
+
+  <h3>Response</h3>
+  <pre id="result">-</pre>
+
+  <script>
+    async function upload() {
+      const input = document.getElementById("imageInput");
+      const result = document.getElementById("result");
+
+      if (!input.files.length) {
+        alert("이미지를 선택하세요");
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("image", input.files[0]);
+
+      try {
+        const res = await fetch("http://localhost:3001/analyze/image", {
+          method: "POST",
+          body: formData
+        });
+
+        const data = await res.json();
+        result.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        result.textContent = err.message;
+      }
+    }
+  </script>
+</body>
+</html>
