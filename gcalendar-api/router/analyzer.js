@@ -30,44 +30,35 @@ function filenameToUploadGemini(path, mimeType){
 
 const planDir = "uploads/plans/";
 
-function savePlanToServerStorage(planData){
-    const safeSummary = planData.summary.replace(/[^a-z0-9ㄱ-ㅎㅏ-ㅣ가-힣]/gi, '_').substring(0, 20);
-    const randomNumber = (Math.floor(Math.random() * 10) + 1).toString();
-    const fileName = `${Date.now()}_${safeSummary}${randomNumber}.json`;
-    const filePath = path.join(planDir, fileName);
-    
-    fs.writeFile(filePath, JSON.stringify(planData, null, 2), (err) => {
-        if (err) {
-            console.error('파일 저장 중 오류 발생:', err);
-        } else {
-            console.log(`일정 저장 완료: ${filePath}`);
-        }
-    });
+async function savePlanToServerStorage(planData){
+  if (!fs.existsSync(planDir)) fs.mkdirSync(planDir, { recursive: true });
 
-    return filePath;
+  const safeSummary = (planData.summary ?? "")
+    .replace(/[^a-z0-9ㄱ-ㅎㅏ-ㅣ가-힣]/gi, "_")
+    .substring(0, 20);
+
+  const randomNumber = String(Math.floor(Math.random() * 10) + 1);
+  const fileName = `${Date.now()}_${safeSummary}${randomNumber}.json`;
+  const filePath = path.join(planDir, fileName);
+
+  await fs.promises.writeFile(filePath, JSON.stringify(planData, null, 2), "utf-8");
+  return filePath;
 }
 
-async function dbInsert(messagepath, imagepath = null){
-    
-    // Insert log : image exists
-    if(imagepath != null)
-    {
-        const newLog = await pool.query(
-        `INSERT INTO logs 
-        (messagepath, imagepath) VALUES ($1, $2) 
-        RETURNING id, messagepath, imagepath, created_at`,
-        [messagepath, imagepath]
-    );
-    } else {
-        const newLog = await pool.query(
-        `INSERT INTO logs 
-        (messagepath) VALUES ($1) 
-        RETURNING id, messagepath, created_at`,
-        [messagepath]
-    );
-    }
-    
+
+
+async function dbInsert(summary, messagepath, imagepath = null, eventId = null) {
+  const { rows } = await pool.query(
+    `
+    INSERT INTO logs (summary, messagepath, imagepath, event_id)
+    VALUES ($1, $2, $3, $4)
+    RETURNING id, summary, messagepath, imagepath, event_id, created_at
+    `,
+    [summary ?? null, messagepath, imagepath, eventId]
+  );
+  return rows[0];
 }
+
 
 router.post("/image", upload.single('image'), async(req, res) => {
 
@@ -140,11 +131,9 @@ router.post("/image", upload.single('image'), async(req, res) => {
         }
         
         console.log(response.text);
-        const messagepath = savePlanToServerStorage(parsed);
-        
-        dbInsert(messagepath, imagepath);
-        
-        return res.json({ success: true, message: parsed });
+        const messagepath = await savePlanToServerStorage(parsed);
+        const saved = await dbInsert(parsed?.summary, messagepath, imagepath, null);
+        return res.json({ success: true, message: parsed, logId: saved.id });
 
     } catch(err){
         res.status(500).json({ success : false, message : err.message});
@@ -195,7 +184,6 @@ router.post("/text", async (req, res) => {
       .replace(/^```\s*/i, "")
       .replace(/```$/i, "")
       .trim();
-
     let parsed;
     try {
       parsed = JSON.parse(cleaned);
@@ -207,10 +195,11 @@ router.post("/text", async (req, res) => {
       });
     }
     
-    const messagepath = savePlanToServerStorage(parsed);
-    dbInsert(messagepath);
+    const messagepath = await savePlanToServerStorage(parsed);
+    const saved = await dbInsert(parsed?.summary, messagepath, null, null);
+    return res.json({ success: true, message: parsed, logId: saved.id });
 
-    return res.json({ success: true, message: parsed });
+
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -302,14 +291,143 @@ router.post("/multi", upload.single('image'), async (req, res) => {
         }
         
         console.log(response.text);
-        const messagepath = savePlanToServerStorage(parsed);
-        
-        dbInsert(messagepath, imagepath);
-        
-        return res.json({ success: true, message: parsed });
+        const messagepath = await savePlanToServerStorage(parsed);
+        const saved = await dbInsert(parsed?.summary, messagepath, imagepath, null);
+        return res.json({ success: true, message: parsed, logId: saved.id });
 
     } catch(err){
         res.status(500).json({ success : false, message : err.message});
     }
 });
+
+router.patch("/logs/:id/event", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const eventId = String(req.body?.eventId ?? "").trim();
+    if (!id || !eventId) return res.status(400).json({ success:false, message:"id/eventId required" });
+
+    const { rows } = await pool.query(
+      `UPDATE logs SET event_id=$1 WHERE id=$2 RETURNING id, event_id`,
+      [eventId, id]
+    );
+    return res.json({ success:true, log: rows[0] });
+  } catch (err) {
+    return res.status(500).json({ success:false, message: err.message });
+  }
+});
+
+router.get("/logs/by-event/:eventId", async (req, res) => {
+  try {
+    const eventId = String(req.params.eventId ?? "").trim();
+    if (!eventId) return res.status(400).json({ success:false, message:"eventId required" });
+
+    const { rows } = await pool.query(
+      `SELECT id, summary, messagepath, imagepath, event_id, created_at
+       FROM logs
+       WHERE event_id = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [eventId]
+    );
+
+    const row = rows[0] ?? null;
+    if (!row) return res.status(404).json({ success:false, message:"log not found" });
+
+    return res.json({ success:true, log: row });
+  } catch (err) {
+    return res.status(500).json({ success:false, message: err.message });
+  }
+});
+
+router.get("/logs/:id/raw", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ success:false, message:"invalid log id" });
+    }
+
+    const { rows } = await pool.query(
+      `SELECT id, messagepath, imagepath FROM logs WHERE id=$1`,
+      [id]
+    );
+    const row = rows[0];
+    if (!row) return res.status(404).json({ success:false, message:"log not found" });
+
+    let planJson = null;
+    if (row.messagepath) {
+      const p = path.resolve(row.messagepath);
+      if (fs.existsSync(p)) {
+        planJson = JSON.parse(fs.readFileSync(p, "utf-8"));
+      }
+    }
+
+    return res.json({
+      success: true,
+      raw: { plan: planJson, imagepath: row.imagepath }
+    });
+  } catch (err) {
+    return res.status(500).json({ success:false, message: err.message });
+  }
+});
+
+
+
+router.get("/logs", async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit ?? 50), 200);
+
+    const { rows } = await pool.query(
+      `
+      SELECT id, summary, created_at
+      FROM logs
+      ORDER BY created_at DESC
+      LIMIT $1
+      `,
+      [limit]
+    );
+
+    return res.json({ success: true, logs: rows });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
+router.delete("/logs", async (req, res) => {
+  try {
+    // 1) DB에서 삭제 대상 경로 확보
+    const { rows } = await pool.query(`SELECT messagepath, imagepath FROM logs`);
+
+    // 2) DB 삭제 (먼저 경로를 확보했으니 DB는 지워도 됨)
+    await pool.query(`DELETE FROM logs`);
+
+    // 3) 파일만 찾아가서 삭제
+    let deletedFiles = 0;
+
+    for (const r of rows) {
+      for (const p of [r.messagepath, r.imagepath]) {
+        if (!p) continue;
+
+        const abs = path.resolve(p);
+        if (!fs.existsSync(abs)) continue;
+
+        try {
+          const st = fs.statSync(abs);
+          if (st.isFile()) {
+            fs.unlinkSync(abs);
+            deletedFiles += 1;
+          }
+        } catch {
+          // 파일 삭제 실패는 무시 (권한/잠금 등)
+        }
+      }
+    }
+
+    return res.json({ success: true, deletedRows: rows.length, deletedFiles });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: String(e) });
+  }
+});
+
+
 export default router;
