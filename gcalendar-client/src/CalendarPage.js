@@ -1,3 +1,5 @@
+import { createPortal } from "react-dom";
+import "./CalendarWorkspace.css";
 import { API_BASE_URL } from "./config";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
@@ -6,16 +8,15 @@ import { useNavigate } from "react-router-dom";
  * CalendarMonthBoard (Full rewrite)
  * - 화면 전체 Month View 렌더링
  * - Google Calendar 색상(/colors) + (event.colorId 우선, 없으면 primary calendarList.colorId)
- * - 선택 월 기준 ±6개월 범위를 최대 2000개까지 Prefetch
+ * - 선택 월 기준 앞뒤 12개월 범위를 최대 2000개까지 조회
  * - IndexedDB 캐시(용량/성능 측면에서 localStorage보다 안전)
- * - 캐시 즉시 렌더 → 필요 시 백그라운드 갱신
+ * - 등록 결과를 화면과 IndexedDB에 반영
  */
 
 /* =========================
  * Date utilities
  * ========================= */
 const pad2 = (n) => String(n).padStart(2, "0");
-const loginSessionId = sessionStorage.getItem("login_session_id") ?? "0";
 
 
 function monthValueFromDate(d = new Date()) {
@@ -60,10 +61,6 @@ function getBulkRangeAround(selectedMonth, monthsBack = 12, monthsForward = 12) 
   return { start, end };
 }
 
-function isDateWithinRange(d, range) {
-  if (!range?.start || !range?.end) return false;
-  return d >= range.start && d < range.end;
-}
 
 function buildMonthGrid(ym /* "YYYY-MM" */) {
   const [yStr, mStr] = ym.split("-");
@@ -161,40 +158,6 @@ function idbOpen() {
     };
     req.onsuccess = () => resolve(req.result);
   });
-}
-
-function openErrorWindow(title, message) {
-  const w = window.open("", "_blank", "width=520,height=420");
-  if (!w) {
-    alert(`${title}\n\n${message}\n\n(팝업 차단됨)`);
-    return;
-  }
-
-  const esc = (s) =>
-    String(s ?? "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#39;");
-
-  w.document.open();
-  w.document.write(`
-    <!doctype html>
-    <html>
-    <head>
-      <meta charset="utf-8" />
-      <title>${esc(title)}</title>
-    </head>
-    <body style="font-family: system-ui; padding: 16px;">
-      <h2 style="margin: 0 0 12px;">${esc(title)}</h2>
-      <pre style="white-space: pre-wrap; background:#f3f4f6; padding:12px; border-radius:10px;">${esc(
-        message
-      )}</pre>
-    </body>
-    </html>
-  `);
-  w.document.close();
 }
 
 
@@ -348,6 +311,9 @@ export default function CalendarMonthBoard() {
   const loginSessionId = sessionStorage.getItem("login_session_id") ?? "0";
 
   const [status, setStatus] = useState();
+  const [analysisError, setAnalysisError] = useState("");
+  const [imageAttempt, setImageAttempt] = useState(0);
+  const workspaceRef = useRef(null);
   const [selectedMonth, setSelectedMonth] = useState(monthValueFromDate());
 
   const [events, setEvents] = useState([]);
@@ -355,10 +321,41 @@ export default function CalendarMonthBoard() {
   const [primaryCalColorId, setPrimaryCalColorId] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [selectedEvent, setSelectedEvent] = useState(null);
-  const [selectedEventDay, setSelectedEventDay] = useState(null);
   const [droppedImageUrl, setDroppedImageUrl] = useState(null);
   
   const [droppedFile, setDroppedFile] = useState(null);
+  const imageRequestRef = useRef(null);
+  const imageInputRef = useRef(null);
+
+  function removeImage() {
+    imageRequestRef.current?.abort();
+    setDroppedFile(null);
+    setIsAnalyzingImage(false);
+    setDroppedImageUrl(null);
+    if (imageInputRef.current) imageInputRef.current.value = "";
+  }
+
+  function attachImage(file) {
+    if (!file?.type?.startsWith("image/")) {
+      setAnalysisError("이미지 파일을 선택해 주세요.");
+      return;
+    }
+    imageRequestRef.current?.abort();
+    setDroppedFile(file);
+    setDroppedImageUrl(URL.createObjectURL(file));
+  }
+
+  function handleImagePaste(event) {
+    const item = Array.from(event.clipboardData.items).find((entry) => entry.type.startsWith("image/"));
+    const file = item?.getAsFile();
+    if (!file) return;
+    event.preventDefault();
+    attachImage(file);
+  }
+
+  useEffect(() => {
+    return () => { if (droppedImageUrl) URL.revokeObjectURL(droppedImageUrl); };
+  }, [droppedImageUrl]);
 
   const [isLogOpen, setIsLogOpen] = useState(false);
   const [logs, setLogs] = useState([]);
@@ -367,6 +364,17 @@ export default function CalendarMonthBoard() {
   const [isProcessingText, setIsProcessingText] = useState(false);
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
   const [autoSubmit, setAutoSubmit] = useState(false);
+  const busy = isAnalyzingImage || isProcessingText || isCreatingEvent;
+  useEffect(() => {
+    if (!busy) return;
+    const focused = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      if (focused?.isConnected) focused.focus();
+    };
+  }, [busy]);
   const submitLockRef = useRef(false); 
 
 
@@ -425,7 +433,9 @@ export default function CalendarMonthBoard() {
         msg
       );
 
-    if (tokenLike) return "Gemini 토큰 부족";
+    if (/Failed to fetch|NetworkError|fetch failed/i.test(msg)) return "서버에 연결할 수 없습니다. 백엔드 실행 상태와 네트워크를 확인한 후 다시 시도하세요.";
+    if (/TimeoutError|시간 초과/i.test(msg)) return "분석 시간이 초과되었습니다. 잠시 후 다시 시도하세요.";
+    if (tokenLike) return "AI 사용 한도에 도달했습니다. 잠시 후 다시 시도하거나 API 사용량을 확인하세요.";
 
     return msg || "오류가 발생했습니다.";
   }
@@ -433,6 +443,7 @@ export default function CalendarMonthBoard() {
   function resetLeftInputs() {
     setDraft({
       __logId: null,
+    colorId: "",
       summary: "",
       description: "",
       location: "",
@@ -440,19 +451,14 @@ export default function CalendarMonthBoard() {
       end: { date: "", dateTime: "", timeZone: "Asia/Seoul" },
     });
     setNlText("");
-    setDroppedFile(null);
-
-    // objectURL 정리(메모리 누수 방지)
-    setDroppedImageUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return null;
-    });
+    removeImage();
   }
 
 
 
   const [draft, setDraft] = useState({
     __logId: null,
+    colorId: "",
     summary: "",
     description: "",
     location: "",
@@ -467,7 +473,6 @@ export default function CalendarMonthBoard() {
     return { Authorization: `Bearer ${accessToken}` };
   }, [accessToken]);
 
-  const CACHE_TTL_MS = 1000 * 60 * 10; // 10분(원하시면 조정)
 
   function changeMonth(delta) {
     setSelectedMonth((prev) => {
@@ -525,6 +530,7 @@ export default function CalendarMonthBoard() {
     if (!accessToken) throw new Error("accessToken 없음");
 
     const eventBody = {
+      ...(draft.colorId ? { colorId: draft.colorId } : {}),
       summary: draft.summary || "",
       description: draft.description || "",
       location: draft.location || "",
@@ -558,6 +564,7 @@ export default function CalendarMonthBoard() {
     console.log("INSERT_EVENT_BODY", eventBody);
 
     const res = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+      signal: AbortSignal.timeout(90000),
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -601,6 +608,7 @@ export default function CalendarMonthBoard() {
     submitLockRef.current = true;
 
     try {
+      setAnalysisError("");
       setIsCreatingEvent(true);
       setStatus("등록 중...");
       const created = await insertEventToGoogleCalendar(draftToSubmit);
@@ -610,6 +618,7 @@ export default function CalendarMonthBoard() {
 
       if (logId && eventId) {
         await fetch(`${API_BASE_URL}/analyze/logs/${logId}/event`, {
+          signal: AbortSignal.timeout(15000),
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ eventId }),
@@ -626,6 +635,7 @@ export default function CalendarMonthBoard() {
       resetLeftInputs();
     } catch (e) {
       setStatus(String(e));
+      setAnalysisError(mapGeminiErrorMessage(e));
     } finally {
       setIsCreatingEvent(false); // ✅ 추가
       submitLockRef.current = false;
@@ -683,17 +693,18 @@ export default function CalendarMonthBoard() {
       setEvents((prev) => prev.filter((e) => e.id !== ev.id));
 
       setSelectedEvent(null);
-      setSelectedEventDay(null);
 
       setStatus("삭제 완료");
     } catch (e) {
       setStatus(String(e));
+      setAnalysisError(mapGeminiErrorMessage(e));
     }
   }
 
   
   async function sendNaturalLanguage(text) {
     const res = await fetch(`${API_BASE_URL}/analyze/text`, {
+      signal: AbortSignal.timeout(90000),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
@@ -749,13 +760,19 @@ export default function CalendarMonthBoard() {
   // 2) 드롭된 이미지 분석
   useEffect(() => {
     if (!droppedFile) return;
+    const controller = new AbortController();
+    imageRequestRef.current = controller;
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 90000);
 
     (async () => {
       try {
+        setAnalysisError("");
         setIsAnalyzingImage(true);
         setStatus("이미지 분석 중...");
 
         const res = await fetch(`${API_BASE_URL}/analyze/image`, {
+          signal: controller.signal,
           method: "POST",
           body: (() => {
             const fd = new FormData();
@@ -781,23 +798,29 @@ export default function CalendarMonthBoard() {
           throw new Error(`${res.status} ${serverMsg}`);
         }
 
+        if (controller.signal.aborted) return;
         const extracted = data.message;
+        if (!extracted || typeof extracted !== "object" || !extracted.summary || !extracted.start?.date || !extracted.end?.date) throw new Error("분석 결과에 제목 또는 날짜가 없습니다. 입력 내용을 보완해 다시 시도하세요.");
         const logId = data.logId;
 
         setDraft((prev) => {
           const next = buildNextDraft(prev, extracted, logId);
-          if (autoSubmit) queueMicrotask(() => handleConfirmCreateWithDraft(next));
+          if (autoSubmit) queueMicrotask(() => { if (!controller.signal.aborted) handleConfirmCreateWithDraft(next); });
           return next;
         });
 
         setStatus("분석 완료");
       } catch (e) {
-        alert(`이미지 처리 실패: ${mapGeminiErrorMessage(e)}`);
+        if (controller.signal.aborted && !timedOut) return;
+        setAnalysisError(timedOut ? "이미지 분석 시간이 초과되었습니다. 다시 시도해 주세요." : mapGeminiErrorMessage(e));
+        setStatus("이미지 분석 실패");
       } finally {
-        setIsAnalyzingImage(false);
+        clearTimeout(timeout);
+        if (!controller.signal.aborted || timedOut) setIsAnalyzingImage(false);
       }
     })();
-  }, [droppedFile]);
+    return () => { clearTimeout(timeout); controller.abort(); };
+  }, [droppedFile, imageAttempt]);
 
 
   const monthGrid = useMemo(() => buildMonthGrid(selectedMonth), [selectedMonth]);
@@ -807,76 +830,44 @@ export default function CalendarMonthBoard() {
   const today = new Date();
 
   return (
-    <div style={{ height: "100vh", display: "flex" }}>
+        <div className="calendar-workspace" ref={workspaceRef} inert={busy} aria-busy={busy}>
+      {busy && createPortal(
+        <div className="processing-overlay" role="dialog" aria-modal="true" aria-labelledby="processing-title" tabIndex={-1} ref={(node) => node?.focus()} onKeyDown={(event) => { if (event.key === "Tab") event.preventDefault(); }}>
+          <div className="processing-card" role="status" aria-live="polite">
+            <div className="processing-spinner" aria-hidden="true" />
+            <h2 id="processing-title">{isAnalyzingImage ? "이미지를 분석하고 있어요" : isProcessingText ? "텍스트를 분석하고 있어요" : "일정을 등록하고 있어요"}</h2>
+            <p>잠시만 기다려 주세요. 완료되면 화면이 다시 활성화됩니다.</p>
+          </div>
+        </div>, document.body
+      )}
       {/* Left panel (toggle) */}
       {isSidebarOpen && (
-        <aside
-          style={{
-            position: "relative",
-            width: "16.6667%",
-            borderRight: "1px solid #e5e7eb",
-            padding: 12,
-            boxSizing: "border-box",
-            display: "flex",
-            flexDirection: "column",
-            gap: 12,
-            minHeight: 0,
-            pointerEvents: (isAnalyzingImage || isProcessingText) ? "none" : "auto",
-            opacity: (isAnalyzingImage || isProcessingText || isCreatingEvent) ? 0.5 : 1,
-          }}
-        >
-        {(isAnalyzingImage || isProcessingText || isCreatingEvent) && (
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              zIndex: 999999,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              pointerEvents: "none",
-            }}
-          >
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-              <div
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: "50%",
-                  border: "4px solid rgba(0,0,0,0.15)",
-                  borderTopColor: "rgba(0,0,0,0.65)",
-                  animation: "spin 0.8s linear infinite",
-                }}
-              />
-              <div style={{ fontWeight: 800, fontSize: 14 }}>
-                {isAnalyzingImage ? "이미지 처리 중..." : isProcessingText ? "텍스트 처리 중..." : "일정 추가 중..."}
-              </div>
-            </div>
-          </div>
-        )}
-
-
-          {/* 상단 1/3: 드래그 앤 드롭 */}
+        <aside className="analysis-panel" aria-label="이미지 분석과 텍스트 프롬프트">
+          <h2>AI 일정 만들기</h2>
+          <p className="analysis-help">이미지 또는 텍스트로 일정을 준비하고 내용을 확인해 등록하세요.</p>
+          <p role="status">{status || (isAnalyzingImage ? "이미지 분석 중..." : isProcessingText ? "텍스트 분석 중..." : "")}</p>
+          {analysisError && <div className="analysis-error" role="alert"><strong>처리하지 못했어요</strong><p>{analysisError}</p><p>입력 내용은 유지됩니다. 내용을 확인한 후 다시 시도하세요.</p><button onClick={() => setAnalysisError("")}>닫기</button></div>}
+          <section className="analysis-input-section" aria-label="분석할 내용">
+          <h3>1. 분석할 내용</h3>
+          <p className="analysis-help">이미지를 첨부하거나 아래에 일정을 입력하세요.</p>
+          <div className="image-actions">
+            <label className="image-picker">이미지 선택
+              <input ref={imageInputRef} type="file" accept="image/*" onChange={(e) => { if (e.target.files?.[0]) attachImage(e.target.files[0]); e.target.value = ""; }} />
+            </label>
+            {droppedImageUrl && <><button type="button" onClick={() => setImageAttempt((value) => value + 1)}>다시 분석</button><button type="button" onClick={removeImage}>이미지 제거</button></>}
+          </div>          {/* 상단 1/3: 드래그 앤 드롭 */}
           <div
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
-
-              const file = e.dataTransfer.files?.[0] ?? null;
-              if (!file) return;
-              if (!file.type?.startsWith("image/")) return;
-
-              setDroppedFile(file);
-
-              // 기존 preview url 정리 후 새 url 생성
-              setDroppedImageUrl((prev) => {
-                if (prev) URL.revokeObjectURL(prev);
-                return URL.createObjectURL(file);
-              });
+              const file = e.dataTransfer.files?.[0];
+              if (file) attachImage(file);
             }}
-            style={{
+            onPaste={handleImagePaste}
+            tabIndex={0}
+            aria-label="이미지 붙여넣기 또는 드롭 영역"            style={{
               position: "relative",
-              flex: 2,
+              flex: "0 0 180px",
               border: "2px dashed #cbd5e1",
               borderRadius: 12,
               background: "#f8fafc",
@@ -898,19 +889,84 @@ export default function CalendarMonthBoard() {
               />
             ) : (
               <div style={{ fontWeight: 700, opacity: 0.75 }}>
-                이미지를 여기로 드래그 & 드롭
+                이미지를 드래그하거나 이 영역에서 Ctrl+V로 붙여넣으세요
               </div>
             )}
           </div>
 
+            <div style={{ marginTop: "auto", display: "grid", gap: 8, paddingTop: 10, borderTop: "1px solid #e5e7eb" }}>
+              <div style={{ fontWeight: 800 }}>텍스트 프롬프트</div>
+              <textarea
+                aria-label="텍스트 프롬프트"
+                onPaste={handleImagePaste}
+                value={nlText}
+                onChange={(e) => setNlText(e.target.value)}
+                placeholder="일정을 입력하거나 복사한 이미지를 Ctrl+V로 붙여넣으세요"
+                rows={3}
+                style={{
+                  width: "90%",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #e5e7eb",
+                  outline: "none",
+                  resize: "vertical",
+                }}
+              />
+              <button
+                disabled={isAnalyzingImage || isProcessingText || isCreatingEvent}
+                onClick={async () => {
+                  const text = (nlText ?? "").trim();
+                  if (!text) { setAnalysisError("분석할 텍스트를 입력해 주세요."); return; }
+                  try {
+                    setAnalysisError("");
+                    setIsProcessingText(true);
+
+                    const data = await sendNaturalLanguage(nlText);
+                    if (!data?.success) throw new Error(data?.message ?? "text analyze 실패");
+
+                    let extracted = data.message;
+                    if (typeof extracted === "string") extracted = JSON.parse(extracted);
+
+                    if (!extracted || typeof extracted !== "object" || !extracted.summary || !extracted.start?.date || !extracted.end?.date) throw new Error("분석 결과에 제목 또는 날짜가 없습니다. 입력 내용을 보완해 주세요.");
+                    setDraft((prev) => {
+                      const next = buildNextDraft(prev, extracted, data.logId);
+
+                      if (autoSubmit) {
+                        queueMicrotask(() => handleConfirmCreateWithDraft(next));
+                      }
+                      return next;
+                    });
+
+                  } catch (e) {
+                    setAnalysisError(mapGeminiErrorMessage(e));
+                    setStatus("텍스트 분석 실패");
+                  } finally {
+                    setIsProcessingText(false);
+                  }
+                }}
+                style={{
+                  border: "1px solid #e5e7eb",
+                  background: "transparent",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  fontWeight: 800,
+                }}
+              >
+                전송
+              </button>
+            </div>
+          </section>
+          <section className="analysis-result-section" aria-label="분석 결과">
           {/* 하단 2/3: 텍스트 입력 */}
           <div style={{ flex: 7, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {/* 하단 절반: 입력 영역 */}
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10, overflow: "auto" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ fontWeight: 800 }}>세부사항 입력</div>
+            <div style={{ fontWeight: 800 }}>2. 분석 결과 · 확인 및 수정</div>
 
             <button
+              disabled={isAnalyzingImage || isProcessingText || isCreatingEvent}
               onClick={handleConfirmCreate}
               style={{
                 border: "1px solid #e5e7eb",
@@ -922,11 +978,32 @@ export default function CalendarMonthBoard() {
                 fontSize: 12,
               }}
             >
-              확인
+              캘린더에 등록
             </button>
           </div>
 
 
+            <fieldset className="event-color-picker">
+              <legend>일정 색상</legend>
+              <p className="analysis-help">Google Calendar에도 선택한 색상으로 등록됩니다.</p>
+              <div className="event-color-options">
+                <label>
+                  <input type="radio" name="event-color" value="" checked={!draft.colorId} onChange={() => setDraft((prev) => ({ ...prev, colorId: "" }))} />
+                  캘린더 기본색
+                </label>
+                {Object.entries(colors?.event ?? {}).map(([id, color]) => (
+                  <label key={id} title={`일정 색상 ${id}`}>
+                    <input type="radio" name="event-color" value={id} checked={draft.colorId === id} onChange={() => setDraft((prev) => ({ ...prev, colorId: id }))} aria-label={`일정 색상 ${id}`} />
+                    <span className="event-color-swatch" style={{ backgroundColor: color.background }} aria-hidden="true" />
+                    <span>{id}</span>
+                  </label>
+                ))}
+              </div>
+              {!colors?.event && <p className="analysis-help">색상 목록을 불러오지 못했습니다. Google 연결 상태를 확인해 주세요. 기본색으로 등록할 수 있습니다.</p>}
+              <div className="event-color-preview" style={{ backgroundColor: (draft.colorId ? colors?.event?.[draft.colorId]?.background : colors?.calendar?.[primaryCalColorId]?.background) || "#dbeafe", color: "#172033" }}>
+                {draft.summary || "일정 색상 미리보기"}
+              </div>
+            </fieldset>
             {/* summary */}
             <label style={{ display: "grid", gap: 6 }}>
               <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.75 }}>summary</div>
@@ -1042,70 +1119,17 @@ export default function CalendarMonthBoard() {
               />
             </div>
 
-            <div style={{ marginTop: "auto", display: "grid", gap: 8, paddingTop: 10, borderTop: "1px solid #e5e7eb" }}>
-              <div style={{ fontWeight: 800 }}>자연어 입력</div>
-              <textarea
-                value={nlText}
-                onChange={(e) => setNlText(e.target.value)}
-                placeholder="예: 2026-01-30 금요일 10시~12시 연구실 미팅, 장소는 IT-5 소회의실"
-                rows={3}
-                style={{
-                  width: "90%",
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid #e5e7eb",
-                  outline: "none",
-                  resize: "vertical",
-                }}
-              />
-              <button
-                onClick={async () => {
-                  const text = (nlText ?? "").trim();
-                  if (!text) return;
-                  try {
-                    setIsProcessingText(true);
 
-                    const data = await sendNaturalLanguage(nlText);
-                    if (!data?.success) throw new Error(data?.message ?? "text analyze 실패");
-
-                    let extracted = data.message;
-                    if (typeof extracted === "string") extracted = JSON.parse(extracted);
-
-                    setDraft((prev) => {
-                      const next = buildNextDraft(prev, extracted, null);
-
-                      if (autoSubmit) {
-                        queueMicrotask(() => handleConfirmCreateWithDraft(next));
-                      }
-                      return next;
-                    });
-
-                  } catch (e) {
-                    alert(`텍스트 처리 실패: ${mapGeminiErrorMessage(e)}`);
-                  } finally {
-                    setIsProcessingText(false);
-                  }
-                }}
-                style={{
-                  border: "1px solid #e5e7eb",
-                  background: "transparent",
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  cursor: "pointer",
-                  fontWeight: 800,
-                }}
-              >
-                전송
-              </button>
-            </div>
           </div>
           </div>
+          </section>
         </aside>
 
       )}
 
     {/* 3) Right main */}
-    <main style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+    <main className="calendar-panel" aria-label="Google 캘린더">
+      <h2 className="calendar-heading">내 캘린더</h2>
       {/* Header */}
         <button
           onClick={() => setIsSidebarOpen((v) => !v)}
@@ -1275,12 +1299,9 @@ export default function CalendarMonthBoard() {
                     const faded = !eventTouchesMonth(ev, selectedMonth);
                     const { bg, fg } = getEventColors(ev);
                     const title = ev.summary ?? "(제목 없음)";
-                    const range = parseEventRange(ev);
-                    const isAllDay = Boolean(ev.start?.date && ev.end?.date);
 
                     const openDetail = () => {
                       setSelectedEvent(ev);
-                      setSelectedEventDay(day);
                     };
 
                     return (
@@ -1332,7 +1353,6 @@ export default function CalendarMonthBoard() {
             primaryCalColorId={primaryCalColorId}
             onClose={() => {
               setSelectedEvent(null);
-              setSelectedEventDay(null);
             }}
             onDelete={handleDeleteEvent}   // ✅ 추가
           />

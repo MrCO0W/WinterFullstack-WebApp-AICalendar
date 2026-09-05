@@ -1,5 +1,5 @@
 import express from 'express';
-import multer from 'multer';
+
 import dotenv from 'dotenv';
 import cors from 'cors';
 import analyzer from './router/analyzer.js'
@@ -19,6 +19,6 @@ app.use('/analyze', analyzer);
 app.use('/uploads', express.static("uploads"));
 
 // Start Server
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
