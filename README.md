@@ -1,6 +1,29 @@
 # AI Calendar
 
-이미지와 텍스트에서 Gemini로 일정 정보를 추출하는 프로젝트입니다. Express 백엔드와 React 클라이언트로 구성됩니다.
+**이미지나 텍스트로 전달받은 일정을 Gemini로 분석하고 Google Calendar에 추가하는 것을 목표로 하는 AI 일정 등록 서비스입니다.**
+
+포스터, 행사 안내문, 대화 속 약속을 일일이 옮겨 적는 번거로움을 줄이기 위해 만들었습니다. 사용자가 이미지를 업로드하거나 일정이 담긴 문장을 입력하면 Gemini가 일정 제목, 날짜, 시간, 장소를 추출하고, 이를 Google Calendar에 등록하는 흐름을 지향합니다.
+
+예를 들어 행사 포스터를 올리거나 “9월 10일 오후 2시 서울에서 팀 회의”라고 입력해 캘린더에 추가할 일정을 준비할 수 있습니다.
+
+> 현재는 Gemini 기반 일정 추출과 서버 저장까지 구현되어 있으며, Google 계정 인증과 Google Calendar 등록 기능은 아직 구현되지 않았습니다.
+
+Express 백엔드와 React 클라이언트로 구성됩니다.
+
+## 주요 기능 요약
+
+현재 구현된 기능은 백엔드 API로 사용할 수 있습니다.
+
+| 기능 | 설명 |
+| --- | --- |
+| 이미지에서 일정 추출 | 포스터나 안내문 이미지를 업로드하면 Gemini가 일정 정보를 추출합니다. |
+| 텍스트에서 일정 추출 | 일정이 포함된 문장을 입력하면 제목, 설명, 장소, 시작·종료 날짜와 시간으로 정리합니다. |
+| 이미지와 문구 함께 분석 | 이미지에 보충 문구를 함께 전달할 수 있습니다. 문구의 정보를 우선하고 잘못된 날짜를 교정하도록 모델에 지시합니다. |
+| 일정 JSON 생성 | 추출한 정보를 `summary`, `description`, `location`, `start`, `end` 필드로 구성해 응답합니다. |
+| 분석 자료 저장 | 업로드 이미지와 결과 JSON을 서버에 저장하고 PostgreSQL에 파일 경로와 생성 시각을 기록합니다. 저장 완료 여부는 별도 확인이 필요합니다. |
+| 이미지 업로드 수동 테스트 | 별도 HTML 테스트 페이지에서 이미지를 전송하고 API 응답을 확인할 수 있습니다. |
+
+예를 들어 “2026년 9월 10일 오후 2시부터 3시까지 서울에서 팀 회의”를 입력하면 제목·장소·시작 및 종료 시간이 담긴 일정 JSON을 생성합니다. 실제 추출 결과는 모델 응답에 따라 달라집니다.
 
 ## 구현 상태
 
@@ -11,6 +34,70 @@
 | Google Calendar | 인증 및 실제 일정 등록 미구현 |
 
 현재 응답은 날짜와 시간을 분리한 프로젝트 자체 JSON 형식입니다.
+
+## 기술 스택
+
+| 영역 | 기술 | 용도 |
+| --- | --- | --- |
+| 언어 | JavaScript, HTML, CSS | 서버 로직과 웹 화면 작성 |
+| 프론트엔드 | React 19, React DOM, Create React App | 화면 구성, 개발 서버, 빌드 |
+| 백엔드 | Node.js, Express 5 | HTTP API 서버, ES Modules 사용 |
+| AI | Gemini, Google GenAI SDK | 이미지·텍스트에서 일정 정보 추출 |
+| 데이터베이스 | PostgreSQL, node-postgres(`pg`) | 분석 파일 경로와 생성 시각 기록 |
+| 파일 저장 | 로컬 파일 시스템, Multer | 이미지 업로드 및 일정 JSON 보관 |
+| 개발·테스트 | nodemon, React Testing Library, Jest(react-scripts 제공) | 서버 자동 재시작, 기본 화면 테스트 |
+| 연동 예정 | Google Calendar | 추출한 일정 등록. 현재 인증·등록 코드 미구현 |
+
+## 설치 환경 및 라이브러리
+
+### 별도로 준비할 항목
+
+- **Node.js와 npm**: 백엔드와 클라이언트 의존성 설치 및 실행에 필요합니다. 저장소에는 Node.js 버전 고정 설정이 없습니다.
+- **PostgreSQL 서버**: 직접 설치하거나 접속 가능한 서버를 준비합니다. `npm install`로 PostgreSQL 서버가 설치되지는 않습니다.
+- **Gemini API 키**: 백엔드 `.env`의 `GEMINI_API_KEY`에 설정합니다.
+
+### 백엔드 라이브러리
+
+버전은 `gcalendar-api/package.json`에 선언된 범위입니다.
+
+| 라이브러리 | 버전 | 용도 |
+| --- | --- | --- |
+| `express` | `^5.2.1` | 서버와 API 라우팅 |
+| `@google/genai` | `^1.38.0` | Gemini API 호출 |
+| `multer` | `^2.0.2` | multipart 이미지 업로드 처리 |
+| `pg` | `^8.17.2` | PostgreSQL 연결 및 SQL 실행 |
+| `dotenv` | `^17.2.3` | `.env` 환경 변수 로드 |
+| `cors` | `^2.8.6` | 브라우저의 교차 출처 요청 허용 설정 |
+| `sharp` | `^0.34.5` | 이미지 처리 라이브러리. 의존성에 등록되어 있지만 현재 분석 경로에서는 미사용 |
+| `nodemon` | `^3.1.11` | 개발용 의존성. 코드 변경 시 서버 재시작 |
+
+### 클라이언트 라이브러리
+
+버전은 `gcalendar-client/package.json`에 선언된 범위입니다.
+
+| 라이브러리 | 버전 | 용도 |
+| --- | --- | --- |
+| `react`, `react-dom` | 각각 `^19.2.4` | UI 컴포넌트 구성 및 브라우저 렌더링 |
+| `react-scripts` | `5.0.1` | 개발 서버, 빌드, 테스트 실행 |
+| `web-vitals` | `^2.1.4` | 웹 성능 측정 도구 |
+| `@testing-library/react` | `^16.3.2` | React 컴포넌트 테스트 |
+| `@testing-library/dom` | `^10.4.1` | 테스트에서 DOM 요소 탐색 |
+| `@testing-library/jest-dom` | `^6.9.1` | DOM 검증용 Jest matcher |
+| `@testing-library/user-event` | `^13.5.0` | 테스트에서 사용자 입력 시뮬레이션 |
+
+### 라이브러리 설치 방법
+
+위 라이브러리는 이미 각 폴더의 `package.json`에 등록되어 있어 개별 설치할 필요가 없습니다. 저장소 루트에서 다음 명령으로 두 앱의 의존성을 모두 설치합니다.
+
+```powershell
+cd gcalendar-api
+npm install
+cd ../gcalendar-client
+npm install
+cd ..
+```
+
+`fs`, `path`는 Node.js 내장 모듈로 추가 설치가 필요 없습니다. 미사용 실험 파일 `services/gemini.js`가 참조하는 `file-type`도 현재 서버 실행에는 필요하지 않습니다. Google Calendar 연동용 라이브러리는 현재 의존성에 포함되어 있지 않습니다.
 
 ## 구조
 
